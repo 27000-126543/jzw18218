@@ -1,4 +1,4 @@
-import { Client } from 'ssh2'
+import { Client, ClientChannel } from 'ssh2'
 import * as net from 'net'
 import type { SSHConnection, SFTPFile, PortForwardRule } from '../../types'
 
@@ -11,6 +11,10 @@ interface ShellStream {
 interface PortForwardEntry {
   rule: PortForwardRule
   server?: net.Server
+  activeSockets?: Set<net.Socket>
+  tcpConnectionHandler?: (info: any, accept: any) => void
+  boundRemotePort?: number
+  boundRemoteHost?: string
 }
 
 interface SSHSession {
@@ -126,7 +130,7 @@ class SSHSessionManager {
       return
     }
 
-    for (const [ruleId, entry] of session.portForwards) {
+    for (const [ruleId] of session.portForwards) {
       try {
         await this.stopPortForward(sessionId, ruleId)
       } catch (_e) {
@@ -287,6 +291,242 @@ class SSHSessionManager {
     })
   }
 
+  private startLocalForward(
+    session: SSHSession,
+    ruleId: string,
+    portForwardRule: PortForwardRule,
+    resolve: (r: PortForwardRule) => void,
+    reject: (e: any) => void
+  ): void {
+    const activeSockets = new Set<net.Socket>()
+    const server = net.createServer((socket: net.Socket) => {
+      activeSockets.add(socket)
+      socket.on('close', () => activeSockets.delete(socket))
+
+      session.client.forwardOut(
+        socket.remoteAddress ?? '127.0.0.1',
+        socket.remotePort ?? 0,
+        portForwardRule.remoteHost,
+        portForwardRule.remotePort,
+        (err, stream) => {
+          if (err) {
+            socket.destroy()
+            return
+          }
+
+          const s = stream as ClientChannel
+          socket.pipe(s)
+          s.pipe(socket)
+
+          const cleanup = () => {
+            try { s.close() } catch (_e) { /* */ }
+            try { socket.destroy() } catch (_e) { /* */ }
+          }
+          socket.on('error', cleanup)
+          s.on('error', cleanup)
+          socket.on('close', cleanup)
+          s.on('close', cleanup)
+        }
+      )
+    })
+
+    server.listen(portForwardRule.localPort, '127.0.0.1', () => {
+      session.portForwards.set(ruleId, { rule: portForwardRule, server, activeSockets })
+      resolve(portForwardRule)
+    })
+
+    server.on('error', (err: Error) => {
+      reject(err)
+    })
+  }
+
+  private startRemoteForward(
+    session: SSHSession,
+    ruleId: string,
+    portForwardRule: PortForwardRule,
+    resolve: (r: PortForwardRule) => void,
+    reject: (e: any) => void
+  ): void {
+    const tcpConnectionHandler = (info: any, accept: any) => {
+      try {
+        const stream = accept() as ClientChannel
+        const localSocket = net.connect(portForwardRule.localPort, '127.0.0.1')
+
+        const cleanup = () => {
+          try { stream.close() } catch (_e) { /* */ }
+          try { localSocket.destroy() } catch (_e) { /* */ }
+        }
+
+        localSocket.on('connect', () => {
+          localSocket.pipe(stream)
+          stream.pipe(localSocket)
+        })
+        localSocket.on('error', cleanup)
+        stream.on('error', cleanup)
+        localSocket.on('close', cleanup)
+        stream.on('close', cleanup)
+      } catch (_e) { /* ignore */ }
+    }
+
+    session.client.forwardIn(portForwardRule.remoteHost, portForwardRule.remotePort, (err, boundPort) => {
+      if (err) { reject(err); return }
+
+      session.client.on('tcp connection', tcpConnectionHandler)
+
+      session.portForwards.set(ruleId, {
+        rule: portForwardRule,
+        tcpConnectionHandler,
+        boundRemoteHost: portForwardRule.remoteHost,
+        boundRemotePort: boundPort ?? portForwardRule.remotePort,
+      })
+
+      resolve(portForwardRule)
+    })
+  }
+
+  private startDynamicForward(
+    session: SSHSession,
+    ruleId: string,
+    portForwardRule: PortForwardRule,
+    resolve: (r: PortForwardRule) => void,
+    reject: (e: any) => void
+  ): void {
+    const activeSockets = new Set<net.Socket>()
+    const server = net.createServer()
+
+    server.on('connection', (socket: net.Socket) => {
+      activeSockets.add(socket)
+      socket.on('close', () => activeSockets.delete(socket))
+      socket.on('error', () => { try { socket.destroy() } catch (_e) { /* */ } })
+
+      let buf: Buffer[] = []
+      let state: 'handshake' | 'request' | 'established' = 'handshake'
+
+      const handleData = (data: Buffer) => {
+        if (state === 'established') return
+
+        buf.push(data)
+        const total = Buffer.concat(buf)
+
+        if (state === 'handshake') {
+          if (total.length < 2) return
+          if (total[0] !== 0x05) {
+            try { socket.destroy() } catch (_e) { /* */ }
+            return
+          }
+          const numMethods = total[1]
+          if (total.length < 2 + numMethods) return
+
+          const reply = Buffer.alloc(2)
+          reply[0] = 0x05
+          reply[1] = 0x00
+          socket.write(reply)
+
+          state = 'request'
+          buf = []
+        } else if (state === 'request') {
+          if (total.length < 4) return
+          if (total[0] !== 0x05 || total[1] !== 0x01) {
+            socket.write(Buffer.from([0x05, 0x07]))
+            try { socket.destroy() } catch (_e) { /* */ }
+            return
+          }
+
+          const atyp = total[3]
+          let host: string
+          let port: number
+          let needBytes = 4
+
+          if (atyp === 0x01) {
+            needBytes = 10
+            if (total.length < needBytes) return
+            host = `${total[4]}.${total[5]}.${total[6]}.${total[7]}`
+            port = (total[8] << 8) | total[9]
+          } else if (atyp === 0x03) {
+            if (total.length < 5) return
+            const hostLen = total[4]
+            needBytes = 5 + hostLen + 2
+            if (total.length < needBytes) return
+            host = total.slice(5, 5 + hostLen).toString()
+            port = (total[5 + hostLen] << 8) | total[5 + hostLen + 1]
+          } else {
+            socket.write(Buffer.from([0x05, 0x08]))
+            try { socket.destroy() } catch (_e) { /* */ }
+            return
+          }
+
+          socket.removeListener('data', handleData)
+
+          session.client.forwardOut(
+            '127.0.0.1', 0, host, port,
+            (err, stream) => {
+              if (err) {
+                try {
+                  const resp = Buffer.alloc(atyp === 0x03 ? needBytes : 10)
+                  resp[0] = 0x05
+                  resp[1] = 0x05
+                  socket.write(resp)
+                } catch (_e) { /* */ }
+                try { socket.destroy() } catch (_e) { /* */ }
+                return
+              }
+
+              const s = stream as ClientChannel
+
+              try {
+                const resp = Buffer.alloc(atyp === 0x03 ? needBytes : 10)
+                resp[0] = 0x05
+                resp[1] = 0x00
+                resp[2] = 0x00
+                resp[3] = atyp
+                if (atyp === 0x01) {
+                  resp[4] = total[4]
+                  resp[5] = total[5]
+                  resp[6] = total[6]
+                  resp[7] = total[7]
+                  resp[8] = total[8]
+                  resp[9] = total[9]
+                } else {
+                  for (let i = 4; i < needBytes; i++) resp[i] = total[i]
+                }
+                socket.write(resp)
+              } catch (_e) { /* */ }
+
+              state = 'established'
+
+              if (total.length > needBytes) {
+                try { s.write(total.slice(needBytes)) } catch (_e) { /* */ }
+              }
+
+              socket.pipe(s)
+              s.pipe(socket)
+
+              const cleanup = () => {
+                try { s.close() } catch (_e) { /* */ }
+                try { socket.destroy() } catch (_e) { /* */ }
+              }
+              socket.on('error', cleanup)
+              s.on('error', cleanup)
+              socket.on('close', cleanup)
+              s.on('close', cleanup)
+            }
+          )
+        }
+      }
+
+      socket.on('data', handleData)
+    })
+
+    server.listen(portForwardRule.localPort, '127.0.0.1', () => {
+      session.portForwards.set(ruleId, { rule: portForwardRule, server, activeSockets })
+      resolve(portForwardRule)
+    })
+
+    server.on('error', (err: Error) => {
+      reject(err)
+    })
+  }
+
   async startPortForward(
     sessionId: string,
     rule: Omit<PortForwardRule, 'id' | 'status' | 'connectionId'>
@@ -307,150 +547,11 @@ class SSHSessionManager {
 
     return new Promise((resolve, reject) => {
       if (rule.type === 'local') {
-        const server = net.createServer((socket: net.Socket) => {
-          session.client.forwardOut(
-            socket.remoteAddress ?? '127.0.0.1',
-            socket.remotePort ?? 0,
-            rule.remoteHost,
-            rule.remotePort,
-            (err, stream) => {
-              if (err) {
-                socket.destroy()
-                return
-              }
-              socket.pipe(stream as any)
-              ;(stream as any).pipe(socket)
-              socket.on('error', () => { try { (stream as any).close() } catch(_e){} })
-              ;(stream as any).on('error', () => { try { socket.destroy() } catch(_e){} })
-            }
-          )
-        })
-
-        server.listen(rule.localPort, '127.0.0.1', () => {
-          session.portForwards.set(ruleId, { rule: portForwardRule, server })
-          resolve(portForwardRule)
-        })
-
-        server.on('error', (err: Error) => {
-          reject(err)
-        })
+        this.startLocalForward(session, ruleId, portForwardRule, resolve, reject)
       } else if (rule.type === 'remote') {
-        session.client.forwardIn(rule.remoteHost, rule.remotePort, (err) => {
-          if (err) { reject(err); return }
-
-          session.client.on('tcp connection', (info, accept) => {
-            const stream = accept()
-            const localSocket = net.connect(rule.localPort, '127.0.0.1')
-            localSocket.pipe(stream)
-            stream.pipe(localSocket)
-            localSocket.on('error', () => { try { stream.close() } catch(_e){} })
-            stream.on('error', () => { try { localSocket.destroy() } catch(_e){} })
-          })
-
-          session.portForwards.set(ruleId, { rule: portForwardRule })
-          resolve(portForwardRule)
-        })
+        this.startRemoteForward(session, ruleId, portForwardRule, resolve, reject)
       } else if (rule.type === 'dynamic') {
-        const server = net.createServer((socket: net.Socket) => {
-          socket.on('data', (data: Buffer) => {
-            try {
-              const version = data[0]
-              if (version === 5) {
-                const cmd = data[1]
-                if (cmd === 1) {
-                  const addrType = data[3]
-                  let host: string
-                  let port: number
-                  let offset: number
-
-                  if (addrType === 1) {
-                    host = `${data[4]}.${data[5]}.${data[6]}.${data[7]}`
-                    port = data[8] * 256 + data[9]
-                    offset = 10
-                  } else if (addrType === 3) {
-                    const addrLen = data[4]
-                    host = data.slice(5, 5 + addrLen).toString()
-                    port = data[5 + addrLen] * 256 + data[6 + addrLen]
-                    offset = 7 + addrLen
-                  } else {
-                    socket.destroy()
-                    return
-                  }
-
-                  session.client.forwardOut(
-                    '127.0.0.1',
-                    0,
-                    host,
-                    port,
-                    (err, stream) => {
-                      if (err) {
-                        const resp = Buffer.alloc(10)
-                        resp[0] = 5; resp[1] = 1
-                        socket.write(resp)
-                        socket.destroy()
-                        return
-                      }
-
-                      const resp = Buffer.alloc(offset)
-                      data.copy(resp)
-                      resp[1] = 0
-                      socket.write(resp)
-
-                      socket.pipe(stream as any)
-                      ;(stream as any).pipe(socket)
-                      socket.on('error', () => { try { (stream as any).close() } catch(_e){} })
-                      ;(stream as any).on('error', () => { try { socket.destroy() } catch(_e){} })
-                    }
-                  )
-                } else if (cmd === 0) {
-                  const resp = Buffer.alloc(data.length >= 3 ? 3 : 2)
-                  resp[0] = 5; resp[1] = 0
-                  if (data.length >= 3) {
-                    resp[2] = 0
-                  }
-                  socket.write(resp)
-                }
-              } else if (version === 4) {
-                const host = `${data[4]}.${data[5]}.${data[6]}.${data[7]}`
-                const port = data[2] * 256 + data[3]
-
-                session.client.forwardOut(
-                  '127.0.0.1',
-                  0,
-                  host,
-                  port,
-                  (err, stream) => {
-                    if (err) {
-                      const resp = Buffer.alloc(8)
-                      resp[0] = 0; resp[1] = 0x5b
-                      socket.write(resp)
-                      socket.destroy()
-                      return
-                    }
-                    const resp = Buffer.alloc(8)
-                    resp[0] = 0; resp[1] = 0x5a
-                    resp.writeUInt16BE(port, 2)
-                    socket.write(resp)
-
-                    socket.pipe(stream as any)
-                    ;(stream as any).pipe(socket)
-                  }
-                )
-              }
-            } catch (_e) {
-              socket.destroy()
-            }
-          })
-        })
-
-        server.listen(rule.localPort, '127.0.0.1', () => {
-          session.portForwards.set(ruleId, { rule: portForwardRule, server })
-          resolve(portForwardRule)
-        })
-
-        server.on('error', (err: Error) => {
-          reject(err)
-        })
+        this.startDynamicForward(session, ruleId, portForwardRule, resolve, reject)
       } else {
         reject(new Error('Unsupported port forward type'))
       }
@@ -464,22 +565,61 @@ class SSHSessionManager {
     const entry = session.portForwards.get(ruleId)
     if (!entry) return
 
-    const rule = entry.rule
+    if (entry.activeSockets) {
+      for (const sock of entry.activeSockets) {
+        try {
+          sock.removeAllListeners()
+          sock.destroy()
+        } catch (_e) {
+          // ignore
+        }
+      }
+      entry.activeSockets.clear()
+    }
 
     if (entry.server) {
       await new Promise<void>((resolve) => {
-        entry.server!.close(() => resolve())
-        try { (entry.server as any).closeAllConnections() } catch (_e) { /* */ }
+        try {
+          ;(entry.server as any).closeAllConnections?.()
+        } catch (_e) { /* */ }
+
+        const t = setTimeout(() => resolve(), 1000)
+        try {
+          entry.server!.close(() => {
+            clearTimeout(t)
+            resolve()
+          })
+        } catch (_e) {
+          clearTimeout(t)
+          resolve()
+        }
       })
+      entry.server.removeAllListeners()
     }
 
-    if (rule.type === 'remote' && session.client) {
+    if (entry.tcpConnectionHandler && session.client) {
+      session.client.removeListener('tcp connection', entry.tcpConnectionHandler)
+    }
+
+    if (entry.rule.type === 'remote' && session.client) {
       await new Promise<void>((resolve) => {
-        session.client.unforwardIn(rule.remoteHost, rule.remotePort, () => resolve())
+        const t = setTimeout(() => resolve(), 1000)
+        try {
+          session.client.unforwardIn(
+            entry.boundRemoteHost ?? entry.rule.remoteHost,
+            entry.boundRemotePort ?? entry.rule.remotePort,
+            () => {
+              clearTimeout(t)
+              resolve()
+            }
+          )
+        } catch (_e) {
+          clearTimeout(t)
+          resolve()
+        }
       })
     }
 
-    entry.rule.status = 'stopped'
     session.portForwards.delete(ruleId)
   }
 
@@ -511,14 +651,29 @@ class SSHSessionManager {
     const entry = session.portForwards.get(ruleId)
     if (!entry) return
 
+    if (entry.activeSockets) {
+      for (const sock of entry.activeSockets) {
+        try { sock.destroy() } catch (_e) { /* */ }
+      }
+    }
     if (entry.server) {
-      try { entry.server.close() } catch (_e) { /* */ }
+      try {
+        ;(entry.server as any).closeAllConnections?.()
+        entry.server.close()
+      } catch (_e) { /* */ }
     }
-
+    if (entry.tcpConnectionHandler && session.client) {
+      try { session.client.removeListener('tcp connection', entry.tcpConnectionHandler) } catch (_e) { /* */ }
+    }
     if (entry.rule.type === 'remote' && session.client) {
-      try { session.client.unforwardIn(entry.rule.remoteHost, entry.rule.remotePort, () => {}) } catch (_e) { /* */ }
+      try {
+        session.client.unforwardIn(
+          entry.boundRemoteHost ?? entry.rule.remoteHost,
+          entry.boundRemotePort ?? entry.rule.remotePort,
+          () => {}
+        )
+      } catch (_e) { /* */ }
     }
-
     session.portForwards.delete(ruleId)
   }
 
