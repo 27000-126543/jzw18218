@@ -1,0 +1,71 @@
+.connection-tree {
+  display: flex;
+  flex-direction: column;
+  user-select: none;
+}
+
+.tree-node {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 32px;
+  padding-right: 8px;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background-color 0.15s ease;
+}
+
+.tree-node:hover {
+  background: #374151;
+}
+
+.tree-node--selected {
+  background: #3b82f6 !important;
+}
+
+.tree-node--selected .tree-node__label {
+  color: #ffffff;
+}
+
+.tree-node--selected .tree-node__icon {
+  color: #ffffff;
+}
+
+.tree-node__expand-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  color: #6b7280;
+  flex-shrink: 0;
+}
+
+.tree-node__icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  flex-shrink: 0;
+}
+
+.tree-node__icon--group {
+  color: #fbbf24;
+}
+
+.tree-node__icon--connection {
+  color: #10b981;
+}
+
+.tree-node__label {
+  flex: 1;
+  font-size: 13px;
+  color: #d1d5db;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tree-node__children {
+  display: flex;
+  flex-direction: column;
+}

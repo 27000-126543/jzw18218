@@ -1,0 +1,76 @@
+.terminal-container {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  background-color: #1e1e1e;
+  overflow: hidden;
+}
+
+.terminal-status-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background-color: #252526;
+  border-bottom: 1px solid #333;
+  font-size: 12px;
+  color: #d4d4d4;
+  flex-shrink: 0;
+}
+
+.status-indicator {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.status-indicator.connected {
+  background-color: #4ec9b0;
+  box-shadow: 0 0 6px #4ec9b0;
+}
+
+.status-indicator.disconnected {
+  background-color: #f48771;
+}
+
+.status-text {
+  font-weight: 500;
+}
+
+.session-id {
+  margin-left: auto;
+  color: #808080;
+  font-size: 11px;
+}
+
+.terminal-wrapper {
+  flex: 1;
+  overflow: hidden;
+}
+
+.terminal-wrapper :global(.xterm) {
+  height: 100%;
+}
+
+.terminal-wrapper :global(.xterm-viewport) {
+  overflow-y: auto;
+}
+
+.terminal-wrapper :global(.xterm-viewport::-webkit-scrollbar) {
+  width: 8px;
+}
+
+.terminal-wrapper :global(.xterm-viewport::-webkit-scrollbar-track) {
+  background: #1e1e1e;
+}
+
+.terminal-wrapper :global(.xterm-viewport::-webkit-scrollbar-thumb) {
+  background: #424242;
+  border-radius: 4px;
+}
+
+.terminal-wrapper :global(.xterm-viewport::-webkit-scrollbar-thumb:hover) {
+  background: #4f4f4f;
+}

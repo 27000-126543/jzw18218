@@ -1,0 +1,353 @@
+.sftp-panel {
+  display: flex;
+  height: 100%;
+  background-color: #252526;
+  position: relative;
+  overflow: hidden;
+}
+
+.sftp-panel.closed {
+  width: 32px;
+}
+
+.sftp-panel.open {
+  width: 100%;
+}
+
+.sftp-toggle-btn {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 32px;
+  height: 48px;
+  border: none;
+  background-color: #2d2d30;
+  color: #808080;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0 4px 4px 0;
+  z-index: 10;
+  transition: background-color 0.15s ease;
+}
+
+.sftp-toggle-btn:hover {
+  background-color: #37373d;
+  color: #d4d4d4;
+}
+
+.sftp-panel.open .sftp-toggle-btn {
+  left: auto;
+  right: 0;
+  border-radius: 4px 0 0 4px;
+}
+
+.sftp-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding-left: 32px;
+}
+
+.sftp-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background-color: #2d2d30;
+  border-bottom: 1px solid #333;
+  flex-shrink: 0;
+}
+
+.sftp-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #d4d4d4;
+}
+
+.sftp-toolbar {
+  display: flex;
+  gap: 4px;
+}
+
+.toolbar-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: transparent;
+  color: #808080;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.toolbar-btn:hover:not(:disabled) {
+  background-color: #37373d;
+  color: #d4d4d4;
+}
+
+.toolbar-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.sftp-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
+  background-color: #252526;
+  border-bottom: 1px solid #333;
+  font-size: 12px;
+  overflow-x: auto;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.sftp-breadcrumb::-webkit-scrollbar {
+  height: 3px;
+}
+
+.sftp-breadcrumb::-webkit-scrollbar-track {
+  background: #252526;
+}
+
+.sftp-breadcrumb::-webkit-scrollbar-thumb {
+  background: #424242;
+  border-radius: 2px;
+}
+
+.breadcrumb-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: none;
+  background: transparent;
+  color: #808080;
+  cursor: pointer;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.breadcrumb-btn:hover {
+  background-color: #37373d;
+  color: #d4d4d4;
+}
+
+.breadcrumb-separator {
+  color: #555;
+  flex-shrink: 0;
+}
+
+.breadcrumb-root,
+.breadcrumb-item button {
+  background: none;
+  border: none;
+  color: #808080;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 2px 4px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.breadcrumb-root:hover,
+.breadcrumb-item button:hover {
+  background-color: #37373d;
+  color: #d4d4d4;
+}
+
+.breadcrumb-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.sftp-file-list {
+  flex: 1;
+  overflow-y: auto;
+  position: relative;
+}
+
+.sftp-file-list::-webkit-scrollbar {
+  width: 8px;
+}
+
+.sftp-file-list::-webkit-scrollbar-track {
+  background: #252526;
+}
+
+.sftp-file-list::-webkit-scrollbar-thumb {
+  background: #424242;
+  border-radius: 4px;
+}
+
+.sftp-file-list::-webkit-scrollbar-thumb:hover {
+  background: #4f4f4f;
+}
+
+.sftp-file-item {
+  display: grid;
+  grid-template-columns: 24px 1fr 80px 140px;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  cursor: pointer;
+  font-size: 12px;
+  color: #d4d4d4;
+  transition: background-color 0.1s ease;
+}
+
+.sftp-file-item:hover {
+  background-color: #2a2d2e;
+}
+
+.sftp-file-item.selected {
+  background-color: #094771;
+}
+
+.file-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+}
+
+.file-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-size {
+  color: #808080;
+  text-align: right;
+}
+
+.file-time {
+  color: #808080;
+  font-size: 11px;
+  text-align: right;
+}
+
+.sftp-loading,
+.sftp-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: #808080;
+  font-size: 13px;
+}
+
+.sftp-file-list.dragging {
+  background-color: rgba(46, 120, 180, 0.1);
+}
+
+.drag-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: rgba(46, 120, 180, 0.2);
+  border: 2px dashed #2e78b4;
+  pointer-events: none;
+  z-index: 10;
+}
+
+.drag-overlay span {
+  font-size: 14px;
+  color: #d4d4d4;
+  background-color: rgba(0, 0, 0, 0.5);
+  padding: 8px 16px;
+  border-radius: 4px;
+}
+
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.modal-content {
+  background-color: #252526;
+  border: 1px solid #333;
+  border-radius: 6px;
+  padding: 20px;
+  min-width: 300px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.modal-content h3 {
+  margin: 0 0 16px 0;
+  font-size: 14px;
+  color: #d4d4d4;
+}
+
+.modal-content input {
+  width: 100%;
+  padding: 6px 10px;
+  background-color: #3c3c3c;
+  border: 1px solid #555;
+  border-radius: 4px;
+  color: #d4d4d4;
+  font-size: 13px;
+  box-sizing: border-box;
+}
+
+.modal-content input:focus {
+  outline: none;
+  border-color: #007acc;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.modal-actions button {
+  padding: 6px 16px;
+  border: 1px solid #555;
+  border-radius: 4px;
+  background-color: #3c3c3c;
+  color: #d4d4d4;
+  cursor: pointer;
+  font-size: 12px;
+  transition: background-color 0.15s ease;
+}
+
+.modal-actions button:hover {
+  background-color: #4a4a4a;
+}
+
+.modal-actions button.primary {
+  background-color: #0e639c;
+  border-color: #0e639c;
+}
+
+.modal-actions button.primary:hover {
+  background-color: #1177bb;
+  border-color: #1177bb;
+}
