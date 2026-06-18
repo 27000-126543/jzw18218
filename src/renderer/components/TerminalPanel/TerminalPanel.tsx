@@ -5,27 +5,21 @@ import { useAppStore } from '@/store/appStore'
 import './TerminalPanel.css'
 
 interface TerminalPanelProps {
-  onNewTab?: () => void
+  onCloseTab?: (tabId: string) => void
 }
 
-export const TerminalPanel = ({ onNewTab }: TerminalPanelProps) => {
-  const { tabs, activeTabId, addTab, updateTab, connections, selectedConnectionId, getConnectionById } = useAppStore()
+export const TerminalPanel = ({ onCloseTab }: TerminalPanelProps) => {
+  const { tabs, activeTabId, addTab, updateTab, selectedConnectionId, getConnectionById } = useAppStore()
 
   const activeTab = tabs.find((t) => t.id === activeTabId)
 
   const handleNewTab = useCallback(() => {
-    if (onNewTab) {
-      onNewTab()
-      return
-    }
-
-    const connectionId = selectedConnectionId
-    if (!connectionId) {
+    if (!selectedConnectionId) {
       alert('请先在左侧选择一个连接')
       return
     }
 
-    const connection = getConnectionById(connectionId)
+    const connection = getConnectionById(selectedConnectionId)
     if (!connection) return
 
     const newTab = addTab(connection)
@@ -38,11 +32,11 @@ export const TerminalPanel = ({ onNewTab }: TerminalPanelProps) => {
       .catch(() => {
         updateTab(newTab.id, { isConnected: false })
       })
-  }, [onNewTab, selectedConnectionId, getConnectionById, addTab, updateTab])
+  }, [selectedConnectionId, getConnectionById, addTab, updateTab])
 
   return (
     <div className="terminal-panel">
-      <TerminalTabs onNewTab={handleNewTab} />
+      <TerminalTabs onNewTab={handleNewTab} onCloseTab={onCloseTab} />
       <div className="terminal-content">
         {tabs.length === 0 ? (
           <div className="empty-terminal">

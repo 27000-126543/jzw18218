@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   HardDrive,
   Server,
@@ -18,7 +18,6 @@ import SFTPPanel from './components/SFTPPanel/SFTPPanel'
 import SnippetPanel from './components/SnippetPanel/SnippetPanel'
 import LogPanel from './components/LogPanel/LogPanel'
 import PortForwardPanel from './components/PortForwardPanel/PortForwardPanel'
-import type { TerminalTab } from '../types'
 import './styles/global.css'
 
 type RightPanelTab = 'sftp' | 'snippets' | 'logs' | 'portForward'
@@ -31,15 +30,15 @@ const App = () => {
     activeTabId,
     getActiveTab,
     addTab,
+    removeTab,
     updateTab,
     getConnectionById,
     addLog,
-    updateLog,
   } = useAppStore()
 
   const [rightPanelTab, setRightPanelTab] = useState<RightPanelTab>('sftp')
   const [rightPanelOpen, setRightPanelOpen] = useState(true)
-  const [currentLogId, setCurrentLogId] = useState<string | null>(null)
+  const logIdMapRef = useRef<Map<string, string>>(new Map())
 
   useEffect(() => {
     initialize()
@@ -52,17 +51,7 @@ const App = () => {
       const connection = getConnectionById(connectionId)
       if (!connection) return
 
-      const sessionId = `session_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`
-      const newTab: TerminalTab = {
-        id: sessionId,
-        connectionId: connection.id,
-        connectionName: connection.name,
-        isConnected: false,
-        isSFTPOpen: true,
-        currentPath: '/',
-      }
-
-      addTab(connection)
+      const newTab = addTab(connection)
 
       const logEntry = {
         connectionId: connection.id,
@@ -73,14 +62,15 @@ const App = () => {
       }
 
       window.electronAPI.ssh
-        .connect(sessionId, connection)
+        .connect(newTab.id, connection)
         .then(() => {
-          updateTab(sessionId, { isConnected: true })
-          addLog({ ...logEntry, status: 'connected' })
-            .then((log) => setCurrentLogId(log.id))
+          updateTab(newTab.id, { isConnected: true })
+          addLog({ ...logEntry, status: 'connected' }).then((log) => {
+            logIdMapRef.current.set(newTab.id, log.id)
+          })
         })
         .catch((err) => {
-          updateTab(sessionId, { isConnected: false })
+          updateTab(newTab.id, { isConnected: false })
           addLog({
             ...logEntry,
             status: 'failed',
@@ -92,16 +82,21 @@ const App = () => {
     [getConnectionById, addTab, updateTab, addLog]
   )
 
-  useEffect(() => {
-    return () => {
-      if (currentLogId && activeTabId) {
-        updateLog(currentLogId, {
+  const handleCloseTab = useCallback(
+    (tabId: string) => {
+      window.electronAPI.ssh.disconnect(tabId)
+      const logId = logIdMapRef.current.get(tabId)
+      if (logId) {
+        useAppStore.getState().updateLog(logId, {
           status: 'disconnected',
           endTime: Date.now(),
         })
+        logIdMapRef.current.delete(tabId)
       }
-    }
-  }, [activeTabId, currentLogId, updateLog])
+      removeTab(tabId)
+    },
+    [removeTab]
+  )
 
   const connectedCount = tabs.filter((t) => t.isConnected).length
 
@@ -141,7 +136,7 @@ const App = () => {
         <main className="content">
           <div className="content__main-area">
             <div className="content__terminal-area">
-              <TerminalPanel />
+              <TerminalPanel onCloseTab={handleCloseTab} />
             </div>
 
             <div

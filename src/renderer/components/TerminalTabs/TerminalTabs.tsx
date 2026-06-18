@@ -4,9 +4,10 @@ import './TerminalTabs.css'
 
 interface TerminalTabsProps {
   onNewTab?: () => void
+  onCloseTab?: (tabId: string) => void
 }
 
-export const TerminalTabs = ({ onNewTab }: TerminalTabsProps) => {
+export const TerminalTabs = ({ onNewTab, onCloseTab }: TerminalTabsProps) => {
   const { tabs, activeTabId, setActiveTabId, removeTab } = useAppStore()
 
   const handleTabClick = (tabId: string) => {
@@ -15,8 +16,12 @@ export const TerminalTabs = ({ onNewTab }: TerminalTabsProps) => {
 
   const handleCloseTab = (e: React.MouseEvent, tabId: string) => {
     e.stopPropagation()
-    window.electronAPI.ssh.disconnect(tabId)
-    removeTab(tabId)
+    if (onCloseTab) {
+      onCloseTab(tabId)
+    } else {
+      window.electronAPI.ssh.disconnect(tabId)
+      removeTab(tabId)
+    }
   }
 
   const handleNewTab = () => {

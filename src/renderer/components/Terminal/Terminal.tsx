@@ -7,15 +7,11 @@ import './Terminal.css'
 interface TerminalProps {
   sessionId: string
   isConnected: boolean
-  onConnect?: () => void
-  onDisconnect?: () => void
 }
 
 export const TerminalComponent = ({
   sessionId,
   isConnected,
-  onConnect,
-  onDisconnect,
 }: TerminalProps) => {
   const terminalRef = useRef<HTMLDivElement>(null)
   const xtermRef = useRef<Terminal | null>(null)
@@ -55,7 +51,6 @@ export const TerminalComponent = ({
       cursorBlink: true,
       scrollback: 10000,
       allowTransparency: false,
-      rendererType: 'canvas',
     })
 
     const fitAddon = new FitAddon()

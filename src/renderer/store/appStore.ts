@@ -133,10 +133,45 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   removeGroup: async (id) => {
+    const state = get()
+    const descendantIds: string[] = []
+    const findDescendants = (parentId: string) => {
+      const children = state.groups.filter((g) => g.parentId === parentId)
+      for (const child of children) {
+        descendantIds.push(child.id)
+        findDescendants(child.id)
+      }
+    }
+    findDescendants(id)
+    const allGroupIds = [id, ...descendantIds]
+
     await window.electronAPI.group.remove(id)
-    set((state) => ({
-      groups: state.groups.filter((g) => g.id !== id),
-    }))
+
+    set((s) => {
+      const affectedConnections = s.connections.filter(
+        (c) => allGroupIds.includes(c.groupId || '')
+      )
+      const affectedConnIds = new Set(affectedConnections.map((c) => c.id))
+      const newTabs = s.tabs.filter((t) => !affectedConnIds.has(t.connectionId))
+      let newActiveTabId = s.activeTabId
+      if (newTabs.every((t) => t.id !== s.activeTabId)) {
+        newActiveTabId = newTabs.length > 0 ? newTabs[0].id : null
+      }
+
+      return {
+        groups: s.groups.filter((g) => !allGroupIds.includes(g.id)),
+        connections: s.connections.filter(
+          (c) => !allGroupIds.includes(c.groupId || '')
+        ),
+        tabs: newTabs,
+        activeTabId: newActiveTabId,
+        selectedConnectionId: allGroupIds.includes(
+          s.connections.find((c) => c.id === s.selectedConnectionId)?.groupId || ''
+        )
+          ? null
+          : s.selectedConnectionId,
+      }
+    })
   },
 
   addSnippet: async (snippet) => {
@@ -186,14 +221,6 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   addTab: (connection) => {
-    const existingTab = get().tabs.find(
-      (t) => t.connectionId === connection.id && !t.isSFTPOpen
-    )
-    if (existingTab) {
-      set({ activeTabId: existingTab.id })
-      return existingTab
-    }
-
     const newTab: TerminalTab = {
       id: generateId(),
       connectionId: connection.id,

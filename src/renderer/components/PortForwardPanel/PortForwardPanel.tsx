@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useCallback } from 'react'
 import {
   Plus,
   Play,
@@ -41,28 +41,28 @@ export const PortForwardPanel: React.FC = () => {
   const [rules, setRules] = useState<PortForwardRule[]>([])
   const [showModal, setShowModal] = useState(false)
   const [formData, setFormData] = useState<PortForwardFormData>(initialFormData)
+  const [loading, setLoading] = useState(false)
 
   const activeTab = getActiveTab()
   const isConnected = activeTab?.isConnected || false
   const sessionId = activeTab?.id || ''
 
-  useEffect(() => {
-    if (sessionId && isConnected) {
-      loadPortForwards()
-    } else {
+  const refreshList = useCallback(async () => {
+    if (!sessionId || !isConnected) {
       setRules([])
+      return
     }
-  }, [sessionId, isConnected])
-
-  const loadPortForwards = async () => {
-    if (!sessionId) return
     try {
       const data = await window.electronAPI.portForward.list(sessionId)
       setRules(data)
     } catch (error) {
       console.error('Failed to load port forwards:', error)
     }
-  }
+  }, [sessionId, isConnected])
+
+  useEffect(() => {
+    refreshList()
+  }, [refreshList])
 
   const handleCreate = () => {
     setFormData(initialFormData)
@@ -74,40 +74,44 @@ export const PortForwardPanel: React.FC = () => {
       alert('请先打开一个终端连接')
       return
     }
+    setLoading(true)
     try {
-      const updatedRule = await window.electronAPI.portForward.start(sessionId, {
+      await window.electronAPI.portForward.start(sessionId, {
         type: rule.type,
         localPort: rule.localPort,
         remoteHost: rule.remoteHost,
         remotePort: rule.remotePort,
       })
-      setRules((prev) =>
-        prev.map((r) => (r.id === rule.id ? { ...updatedRule, status: 'running' } : r))
-      )
-    } catch (error) {
-      console.error('Failed to start port forward:', error)
-      alert('启动端口转发失败')
+      await refreshList()
+    } catch (error: any) {
+      alert('启动端口转发失败: ' + (error.message || '未知错误'))
+    } finally {
+      setLoading(false)
     }
   }
 
   const handleStop = async (ruleId: string) => {
     if (!sessionId) return
+    setLoading(true)
     try {
       await window.electronAPI.portForward.stop(sessionId, ruleId)
-      setRules((prev) =>
-        prev.map((r) => (r.id === ruleId ? { ...r, status: 'stopped' } : r))
-      )
-    } catch (error) {
-      console.error('Failed to stop port forward:', error)
-      alert('停止端口转发失败')
+      await refreshList()
+    } catch (error: any) {
+      alert('停止端口转发失败: ' + (error.message || '未知错误'))
+    } finally {
+      setLoading(false)
     }
   }
 
-  const handleDelete = (ruleId: string) => {
+  const handleDelete = async (ruleId: string) => {
     if (!confirm('确定要删除这条转发规则吗？')) return
     const rule = rules.find((r) => r.id === ruleId)
     if (rule && rule.status === 'running' && sessionId) {
-      window.electronAPI.portForward.stop(sessionId, ruleId).catch(() => {})
+      try {
+        await window.electronAPI.portForward.stop(sessionId, ruleId)
+      } catch (_e) {
+        // ignore
+      }
     }
     setRules((prev) => prev.filter((r) => r.id !== ruleId))
   }
@@ -127,19 +131,21 @@ export const PortForwardPanel: React.FC = () => {
       return
     }
 
+    setLoading(true)
     try {
-      const newRule = await window.electronAPI.portForward.start(sessionId, {
+      await window.electronAPI.portForward.start(sessionId, {
         type: formData.type,
         localPort: Number(formData.localPort),
-        remoteHost: formData.remoteHost,
-        remotePort: Number(formData.remotePort) || 0,
+        remoteHost: formData.type === 'dynamic' ? '0.0.0.0' : formData.remoteHost,
+        remotePort: formData.type === 'dynamic' ? 0 : Number(formData.remotePort),
       })
-      setRules((prev) => [...prev, newRule])
+      await refreshList()
       setShowModal(false)
       setFormData(initialFormData)
-    } catch (error) {
-      console.error('Failed to create port forward:', error)
-      alert('创建端口转发失败')
+    } catch (error: any) {
+      alert('创建端口转发失败: ' + (error.message || '未知错误'))
+    } finally {
+      setLoading(false)
     }
   }
 
@@ -224,6 +230,7 @@ export const PortForwardPanel: React.FC = () => {
                     {rule.status === 'running' ? (
                       <button
                         onClick={() => handleStop(rule.id)}
+                        disabled={loading}
                         className="p-1.5 text-yellow-400 hover:text-yellow-300 hover:bg-yellow-500/10 rounded transition-colors"
                         title="停止转发"
                       >
@@ -232,7 +239,7 @@ export const PortForwardPanel: React.FC = () => {
                     ) : (
                       <button
                         onClick={() => handleStart(rule)}
-                        disabled={!isConnected}
+                        disabled={!isConnected || loading}
                         className={`p-1.5 rounded transition-colors ${
                           isConnected
                             ? 'text-green-400 hover:text-green-300 hover:bg-green-500/10'
@@ -255,11 +262,11 @@ export const PortForwardPanel: React.FC = () => {
                 <div className="flex items-center gap-2 text-xs text-gray-400">
                   {rule.type === 'dynamic' ? (
                     <span className="font-mono">
-                      本地 {rule.localPort} → SOCKS代理
+                      127.0.0.1:{rule.localPort} → SOCKS5 代理
                     </span>
                   ) : (
                     <span className="font-mono">
-                      本地 {rule.localPort} → {rule.remoteHost}:{rule.remotePort}
+                      {rule.type === 'local' ? 'L' : 'R'} {rule.localPort} → {rule.remoteHost}:{rule.remotePort}
                     </span>
                   )}
                 </div>
@@ -311,7 +318,9 @@ export const PortForwardPanel: React.FC = () => {
               </div>
 
               <div>
-                <label className="block text-xs text-gray-400 mb-1">本地端口</label>
+                <label className="block text-xs text-gray-400 mb-1">
+                  {formData.type === 'remote' ? '本地端口（目标）' : '本地监听端口'}
+                </label>
                 <input
                   type="number"
                   value={formData.localPort}
@@ -330,7 +339,7 @@ export const PortForwardPanel: React.FC = () => {
                 <>
                   <div>
                     <label className="block text-xs text-gray-400 mb-1">
-                      远程主机
+                      {formData.type === 'local' ? '远程主机' : '远程监听地址'}
                     </label>
                     <input
                       type="text"
@@ -344,7 +353,7 @@ export const PortForwardPanel: React.FC = () => {
                   </div>
                   <div>
                     <label className="block text-xs text-gray-400 mb-1">
-                      远程端口
+                      {formData.type === 'local' ? '远程端口' : '远程监听端口'}
                     </label>
                     <input
                       type="number"
@@ -362,6 +371,13 @@ export const PortForwardPanel: React.FC = () => {
                 </>
               )}
 
+              {formData.type === 'dynamic' && (
+                <div className="text-xs text-gray-500 p-2 bg-gray-800/50 rounded">
+                  动态转发将在本地 {formData.localPort || 'xxxx'} 端口启动 SOCKS5 代理，
+                  浏览器或应用配置该代理后即可通过远程服务器访问网络。
+                </div>
+              )}
+
               <div className="flex justify-end gap-2 pt-2">
                 <button
                   type="button"
@@ -372,7 +388,8 @@ export const PortForwardPanel: React.FC = () => {
                 </button>
                 <button
                   type="submit"
-                  className="flex items-center gap-1.5 px-4 py-2 text-sm text-white bg-blue-600 hover:bg-blue-500 rounded-md transition-colors"
+                  disabled={loading}
+                  className="flex items-center gap-1.5 px-4 py-2 text-sm text-white bg-blue-600 hover:bg-blue-500 rounded-md transition-colors disabled:opacity-50"
                 >
                   <Save size={14} />
                   创建

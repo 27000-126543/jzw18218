@@ -5,6 +5,7 @@ import type {
   CommandSnippet,
   ConnectionLog,
 } from '../../types'
+import { encryptIfDefined, decryptIfDefined } from '../utils/crypto'
 
 interface StoreSchema {
   connections: SSHConnection[]
@@ -12,6 +13,8 @@ interface StoreSchema {
   snippets: CommandSnippet[]
   logs: ConnectionLog[]
 }
+
+const SENSITIVE_FIELDS: (keyof SSHConnection)[] = ['password', 'privateKey', 'passphrase']
 
 class DataStore {
   private store: Store<StoreSchema>
@@ -27,14 +30,37 @@ class DataStore {
     })
   }
 
+  private encryptConnection(conn: SSHConnection): SSHConnection {
+    const encrypted = { ...conn }
+    for (const field of SENSITIVE_FIELDS) {
+      const value = encrypted[field]
+      if (typeof value === 'string' && value.length > 0) {
+        ;(encrypted as any)[field] = encryptIfDefined(value)
+      }
+    }
+    return encrypted
+  }
+
+  private decryptConnection(conn: SSHConnection): SSHConnection {
+    const decrypted = { ...conn }
+    for (const field of SENSITIVE_FIELDS) {
+      const value = decrypted[field]
+      if (typeof value === 'string' && value.length > 0) {
+        ;(decrypted as any)[field] = decryptIfDefined(value)
+      }
+    }
+    return decrypted
+  }
+
   getConnections(): SSHConnection[] {
-    return this.store.get('connections', [])
+    const connections = this.store.get('connections', [])
+    return connections.map((c) => this.decryptConnection(c))
   }
 
   createConnection(
     conn: Omit<SSHConnection, 'id' | 'createdAt' | 'updatedAt'>
   ): SSHConnection {
-    const connections = this.getConnections()
+    const connections = this.store.get('connections', [])
     const now = Date.now()
     const newConn: SSHConnection = {
       ...conn,
@@ -42,30 +68,34 @@ class DataStore {
       createdAt: now,
       updatedAt: now,
     }
-    connections.push(newConn)
+    connections.push(this.encryptConnection(newConn))
     this.store.set('connections', connections)
     return newConn
   }
 
   updateConnection(id: string, updates: Partial<SSHConnection>): SSHConnection {
-    const connections = this.getConnections()
+    const connections = this.store.get('connections', [])
     const index = connections.findIndex((c) => c.id === id)
     if (index === -1) {
       throw new Error(`Connection not found: ${id}`)
     }
-    const updated: SSHConnection = {
-      ...connections[index],
+
+    const existing = this.decryptConnection(connections[index])
+
+    const merged: SSHConnection = {
+      ...existing,
       ...updates,
       id,
       updatedAt: Date.now(),
     }
-    connections[index] = updated
+
+    connections[index] = this.encryptConnection(merged)
     this.store.set('connections', connections)
-    return updated
+    return merged
   }
 
   deleteConnection(id: string): void {
-    const connections = this.getConnections().filter((c) => c.id !== id)
+    const connections = this.store.get('connections', []).filter((c) => c.id !== id)
     this.store.set('connections', connections)
   }
 
@@ -104,8 +134,33 @@ class DataStore {
   }
 
   deleteGroup(id: string): void {
-    const groups = this.getGroups().filter((g) => g.id !== id)
+    const allIds = this.getDescendantGroupIds(id)
+    allIds.push(id)
+
+    const connections = this.store.get('connections', [])
+    const remainingConnections = connections.filter(
+      (c) => !allIds.includes(c.groupId)
+    )
+    this.store.set('connections', remainingConnections)
+
+    const groups = this.getGroups().filter((g) => !allIds.includes(g.id))
     this.store.set('groups', groups)
+  }
+
+  private getDescendantGroupIds(parentId: string): string[] {
+    const groups = this.getGroups()
+    const result: string[] = []
+
+    const findChildren = (pid: string) => {
+      const children = groups.filter((g) => g.parentId === pid)
+      for (const child of children) {
+        result.push(child.id)
+        findChildren(child.id)
+      }
+    }
+
+    findChildren(parentId)
+    return result
   }
 
   getSnippets(): CommandSnippet[] {
